@@ -1,6 +1,40 @@
-This note explains few methods to debug memory corruptions in the OpenBMC application. We will be using mboxd application as an example.
+Here are few methods to debug memory corruption in OpenBMC applications. The mboxd application is used as an example.
 
-1. Using GDB command
-OpenBMC generate core dump file on memory faults like segmentation fault. Find the fault location using gdb. There are two ways to attach gdb.
-- Use method from Andrew's blog to install gdb and source on the openbmc system and then debug on system itself. [Core debug on openbmc system](https://amboar.github.io/notes/2022/01/13/openbmc-development-workflow.html)
-- Copy BMC dump file out of openbmc system. Extract the core file and use [OpenBMC Build Scripts](https://github.com/ibm-openbmc/openbmc-build-scripts)
+1. First method is to use GDB command
+OpenBMC generates core file on memory faults like segmentation fault. You can find the fault location using gdb stack trace. There are two ways to attach gdb to the core file.
+- Debug on openBMC machine by installing gdb and debug source.  [Andrew's blog] (https://amboar.github.io/notes/2022/01/13/openbmc-development-workflow.html) explains this method in detail.
+- Copy BMC dump file out of OpenBMC machine. Extract the core file and use [OpenBMC Build Scripts tools](https://github.com/ibm-openbmc/openbmc-build-scripts) to attach the GDB.
+
+2.  Second method is to use memcheck tool in [Valgrind](https://valgrind.org/docs/manual/mc-manual.html) to detects memory errors in the application. It requires running the mboxd application under valgrind tool.
+    • Update following recipe to add debugging information and compile the image. Install the compiled image on OpenBMC machine.
+      ```meta-ibm/recipes-phosphor/mboxd/mboxd_%.bbappend
+       
+      +FULL_OPTIMIZATION:append=" -Og "
+      +TARGET_CPPFLAGS:append=" -O0 "
+      
+    • Edit service file for mboxd to append valgrind command as shown below.  
+        ◦ On openBMC, run command `systemctl edit --full mboxd.service` to edit the file. Change ExecStart line and exit.
+          ```    -ExecStart=/usr/bin/env mboxd --flash {FLASH_SIZE} --window-size 1M --window-num {WINDOW_NUM} $MBOXD_ARGS
+                 +ExecStart=/usr/bin/valgrind --tool=memcheck --leak-check=full --keep-debuginfo=yes --xtree-memory=full --xtree-memory-file=/var/log/mboxd-xtree.log --errors-for-leak-kinds=definite,possible --undef-value-errors=yes --keep-stacktraces=alloc-and-free --show-mismatched-frees=yes --log-file=/var/log/mboxd.log /usr/bin/env mboxd --flash {FLASH_SIZE} --window-size 1M --window-num {WINDOW_NUM} $MBOXD_ARGS```
+        ◦ Restart the service `systemctl restart mboxd.service`
+        ◦ Check log file for traces
+        ◦ Once testing is done undo all service file updates by removing `/etc/systemd/system/mboxd.service` file which is created by edit.
+    • Note: You can also update recipe file ‘meta-phosphor/recipes-phosphor/mboxd/mboxd/mboxd.service’ in Yocto instead of updating service file on the OpenBMC machine. This requires you to compile the BMC image and update the system.
+
+3.  Use [GCC address sanitizer tool](https://github.com/google/sanitizers/wiki/addresssanitizer) developed by google to detect memory access errors such as use-after-free, memory leaks etc. Compile OpenBMC code with following recipe changes.
+    • Add [gcc-sanitizer](https://github.com/openbmc/openbmc/blob/master/poky/meta/recipes-devtools/gcc/gcc-sanitizers_14.1.bb) dependency to pull that recipe.
+      meta-phosphor/recipes-phosphor/mboxd/mboxd_git.bb
+      ```DEPENDS += "gcc-sanitizers"```
+    • Add extra packages like mboxd source/debug, Libasan runtime library library for AddressSanitizer and libubsan library for Undefined Behavior Sanitizer
+      ```meta-ibm/recipes-phosphor/images/obmc-phosphor-image.bbappend
+      
+      +OBMC_IMAGE_EXTRA_INSTALL:append:p10bmc = " mboxd-src mboxd-dbg libasan libubsan"
+       ```
+    • Add compiler flags to turn on debug build and `-fsanitize=address,undefined`. Refer [GCC more options](https://gcc.gnu.org/onlinedocs/gcc-6.4.0/gcc/Link-Options.html) to defect memory leaks and other memory errors.
+      meta-ibm/recipes-phosphor/images/obmc-phosphor-image.bbappend
+	```+FULL_OPTIMIZATION:append=" -Og -fsanitize=address,undefined "
++TARGET_CPPFLAGS:append=" -O0 "```
+    • Note: You should update your application recipes to enable gcc-sanitizer.
+      
+
+
