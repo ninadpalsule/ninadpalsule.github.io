@@ -38,6 +38,3 @@ Note on few methods to debug ***memory corruption*** in OpenBMC application. The
     +TARGET_CPPFLAGS:append=" -O0 "
     ```
   - ***Note***: You should update your application recipes to enable gcc-sanitizer.
-      
-
-
